@@ -1,3 +1,4 @@
+
 # 📄 Resume Analyzer — Complete Setup Guide
 
 A full-featured resume analysis dashboard built with Python + Streamlit.
@@ -130,3 +131,7 @@ Then add an "AI Analysis" tab in `app.py` and call this function with a user-pro
 - **Add more courses**: Edit `data/skills_data.py` → `COURSES` dict
 - **Change scoring weights**: Edit `utils/scorer.py` → `score_resume()`
 - **Change roadmap phases**: Edit `utils/roadmap.py` → `generate_roadmap()`
+=======
+# resume-analyzer
+AI Resume Analyzer using Streamlit
+>>>>>>> 75002d3eade13292b1ada7d8f77a97acca092e54
