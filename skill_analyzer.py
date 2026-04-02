@@ -1,214 +1,329 @@
-"""
-utils/skill_analyzer.py  –  AI-powered, field-agnostic skill extraction
-Replaces the old hardcoded SKILL_CATEGORIES / JOB_ROLES approach.
-Requires:  pip install anthropic
-Set env var ANTHROPIC_API_KEY in your Streamlit secrets or .env file.
-"""
-
-import json
-import os
 import re
-from anthropic import Anthropic
+from collections import Counter
 
-_client = None
+# -------------------------------
+# FIELD DATABASE
+# -------------------------------
+FIELD_KEYWORDS = {
+    "engineering": [
+        "python", "java", "c++", "c", "javascript", "react", "node", "sql",
+        "machine learning", "data science", "api", "django", "flask", "git",
+        "html", "css", "mongodb", "mysql", "pandas", "numpy", "tensorflow",
+        "scikit-learn", "power bi", "excel", "data analysis"
+    ],
+    "commerce": [
+        "accounting", "tally", "gst", "taxation", "auditing", "bookkeeping",
+        "financial reporting", "balance sheet", "ledger", "invoice", "payroll",
+        "bank reconciliation", "cost accounting", "commerce", "finance", "excel"
+    ],
+    "management": [
+        "sales", "marketing", "business development", "crm", "lead generation",
+        "market research", "branding", "customer relationship", "negotiation",
+        "strategy", "management", "operations", "communication", "advertising"
+    ],
+    "hr": [
+        "recruitment", "talent acquisition", "onboarding", "payroll", "employee engagement",
+        "performance management", "hr", "human resources", "training", "compliance"
+    ],
+    "design": [
+        "photoshop", "illustrator", "figma", "ui", "ux", "wireframe", "prototype",
+        "graphic design", "canva", "adobe xd", "design thinking"
+    ],
+    "general": []
+}
 
-def _get_client():
-    global _client
-    if _client is None:
-        api_key = os.environ.get("ANTHROPIC_API_KEY") or st_secret()
-        _client = Anthropic(api_key=api_key)
-    return _client
+SKILLS_DB = {
+    "engineering": {
+        "Programming Languages": ["python", "java", "c++", "c", "javascript", "sql"],
+        "Web & App": ["html", "css", "react", "node", "flask", "django", "api"],
+        "Data & AI": ["machine learning", "data science", "pandas", "numpy", "tensorflow", "scikit-learn"],
+        "Tools": ["git", "github", "mongodb", "mysql", "power bi", "excel"]
+    },
+    "commerce": {
+        "Accounting": ["accounting", "bookkeeping", "ledger", "balance sheet", "auditing"],
+        "Tax & Finance": ["gst", "taxation", "finance", "financial reporting", "cost accounting"],
+        "Tools": ["tally", "excel", "payroll", "bank reconciliation", "invoice"]
+    },
+    "management": {
+        "Sales": ["sales", "lead generation", "negotiation", "business development"],
+        "Marketing": ["marketing", "branding", "advertising", "market research"],
+        "Business": ["strategy", "operations", "crm", "communication"]
+    },
+    "hr": {
+        "HR Operations": ["recruitment", "talent acquisition", "onboarding", "payroll"],
+        "People Management": ["employee engagement", "training", "performance management", "compliance"]
+    },
+    "design": {
+        "Design Tools": ["figma", "photoshop", "illustrator", "canva", "adobe xd"],
+        "Design Skills": ["ui", "ux", "wireframe", "prototype", "graphic design", "design thinking"]
+    },
+    "general": {
+        "General Skills": ["communication", "excel", "management", "teamwork", "leadership"]
+    }
+}
 
-def st_secret():
-    """Try to get key from Streamlit secrets."""
-    try:
-        import streamlit as st
-        return st.secrets["ANTHROPIC_API_KEY"]
-    except Exception:
-        return None
-
-
-def _ask_claude(prompt: str, max_tokens: int = 1500) -> str:
-    """Send a prompt to Claude and return the text response."""
-    client = _get_client()
-    msg = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return msg.content[0].text.strip()
-
-
-def _parse_json(text: str):
-    """Extract JSON from Claude's response robustly."""
-    # Strip markdown code fences if present
-    text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
-    return json.loads(text)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PUBLIC API — same function signatures as before so app.py needs NO changes
-# ─────────────────────────────────────────────────────────────────────────────
-
-def extract_skills(resume_text: str) -> dict:
-    """
-    Dynamically detect the person's field and extract skills grouped by category.
-    Returns dict: { "Category Name": ["skill1", "skill2", ...], ... }
-    Works for ANY field: engineering, finance, medicine, law, marketing, arts, etc.
-    """
-    prompt = f"""You are a professional resume parser. Analyze the resume below.
-
-1. Detect the person's professional field (e.g. Software Engineering, Accounting, Marketing, Medicine, Law, Sales, Design, etc.)
-2. Extract ALL skills mentioned or strongly implied in the resume.
-3. Group them into relevant categories FOR THAT FIELD.
-   - For a software engineer: Programming Languages, Frameworks, Databases, Cloud, Tools, etc.
-   - For an accountant: Accounting Software, Financial Skills, Tax Knowledge, Compliance, etc.
-   - For a marketer: Digital Marketing, SEO/SEM, Analytics Tools, CRM, Content, etc.
-   - For a doctor: Clinical Skills, Medical Specialties, Equipment, Research, etc.
-   - Use whatever categories make sense for their actual field.
-
-Return ONLY valid JSON in this exact format, no explanation:
-{{
-  "field": "detected field name",
-  "skills": {{
-    "Category Name": ["skill1", "skill2"],
-    "Another Category": ["skill3", "skill4"]
-  }}
-}}
-
-Resume:
-\"\"\"
-{resume_text[:4000]}
-\"\"\"
-"""
-    try:
-        raw = _ask_claude(prompt)
-        data = _parse_json(raw)
-        return data.get("skills", {})
-    except Exception as e:
-        # Fallback: return a minimal result so app doesn't crash
-        return {"General Skills": ["Communication", "Teamwork"]}
-
-
-def detect_field(resume_text: str) -> str:
-    """Detect the person's professional field from their resume."""
-    prompt = f"""Read this resume and return ONLY the professional field in 2-4 words.
-Examples: "Software Engineering", "Financial Accounting", "Digital Marketing", "Clinical Medicine", "Graphic Design", "Civil Engineering", "Human Resources", "Sales & Business Development"
-
-Resume:
-\"\"\"
-{resume_text[:2000]}
-\"\"\"
-
-Return ONLY the field name, nothing else."""
-    try:
-        return _ask_claude(prompt, max_tokens=20)
-    except Exception:
-        return "Professional"
-
-
-def match_job_roles(resume_text: str) -> list:
-    """
-    Match resume to relevant job roles IN THE PERSON'S FIELD.
-    Returns list of role dicts sorted by match %, same structure as before.
-    Works for any field — not just tech.
-    """
-    prompt = f"""You are an expert career counselor. Analyze this resume.
-
-1. Identify the person's professional field.
-2. List the 5 most relevant job roles for this person IN THEIR FIELD.
-   - If they are an accountant, suggest accounting/finance roles (not software roles).
-   - If they are a nurse, suggest healthcare roles.
-   - If they are a marketer, suggest marketing/growth roles.
-   - Match to their ACTUAL background, not generic tech roles.
-
-For each role provide:
-- Role name
-- Match percentage (0-100) based on their skills and experience
-- Required skills for this role (list of 6-8 skills)
-- Which required skills they already have (from the resume)
-- Which required skills they are missing
-- Nice-to-have skills they already have
-- Average salary range (in INR per annum if Indian context, USD if international)
-- Market demand: High / Medium / Low
-
-Return ONLY valid JSON, no explanation:
-[
-  {{
-    "role": "Role Name",
-    "match_pct": 75,
-    "required_matched": ["skill1", "skill2"],
-    "missing_required": ["skill3"],
-    "optional_matched": ["skill4"],
-    "avg_salary": "₹6-10 LPA",
-    "demand": "High"
-  }}
-]
-
-Resume:
-\"\"\"
-{resume_text[:4000]}
-\"\"\"
-"""
-    try:
-        raw = _ask_claude(prompt, max_tokens=2000)
-        roles = _parse_json(raw)
-        # Sort by match_pct descending
-        return sorted(roles, key=lambda x: x.get("match_pct", 0), reverse=True)
-    except Exception:
-        return [{
-            "role": "Professional",
-            "match_pct": 50,
-            "required_matched": [],
-            "missing_required": [],
-            "optional_matched": [],
-            "avg_salary": "Varies",
+ROLE_DB = {
+    "engineering": [
+        {
+            "role": "Backend Developer",
+            "required": ["python", "sql", "api", "flask"],
+            "optional": ["django", "mongodb", "git"],
+            "avg_salary": "₹5-12 LPA",
+            "demand": "High"
+        },
+        {
+            "role": "Frontend Developer",
+            "required": ["html", "css", "javascript", "react"],
+            "optional": ["git", "api"],
+            "avg_salary": "₹4-10 LPA",
+            "demand": "High"
+        },
+        {
+            "role": "Data Analyst",
+            "required": ["excel", "sql", "power bi", "data analysis"],
+            "optional": ["python", "pandas"],
+            "avg_salary": "₹4-9 LPA",
+            "demand": "High"
+        },
+        {
+            "role": "ML Engineer",
+            "required": ["python", "machine learning", "pandas", "numpy"],
+            "optional": ["tensorflow", "scikit-learn", "sql"],
+            "avg_salary": "₹6-15 LPA",
             "demand": "Medium"
-        }]
+        },
+        {
+            "role": "Full Stack Developer",
+            "required": ["html", "css", "javascript", "react", "python", "sql"],
+            "optional": ["node", "mongodb", "git"],
+            "avg_salary": "₹6-14 LPA",
+            "demand": "High"
+        }
+    ],
+    "commerce": [
+        {
+            "role": "Accountant",
+            "required": ["accounting", "tally", "gst", "excel"],
+            "optional": ["auditing", "taxation", "finance"],
+            "avg_salary": "₹3-7 LPA",
+            "demand": "High"
+        },
+        {
+            "role": "Financial Analyst",
+            "required": ["finance", "excel", "financial reporting"],
+            "optional": ["accounting", "cost accounting"],
+            "avg_salary": "₹4-10 LPA",
+            "demand": "Medium"
+        },
+        {
+            "role": "Auditor",
+            "required": ["auditing", "accounting", "balance sheet"],
+            "optional": ["gst", "taxation"],
+            "avg_salary": "₹4-8 LPA",
+            "demand": "Medium"
+        }
+    ],
+    "management": [
+        {
+            "role": "Sales Executive",
+            "required": ["sales", "communication", "negotiation"],
+            "optional": ["crm", "lead generation"],
+            "avg_salary": "₹3-8 LPA",
+            "demand": "High"
+        },
+        {
+            "role": "Marketing Executive",
+            "required": ["marketing", "branding", "communication"],
+            "optional": ["market research", "advertising"],
+            "avg_salary": "₹3-8 LPA",
+            "demand": "High"
+        },
+        {
+            "role": "Business Development Executive",
+            "required": ["business development", "lead generation", "communication"],
+            "optional": ["crm", "strategy"],
+            "avg_salary": "₹4-9 LPA",
+            "demand": "High"
+        }
+    ],
+    "hr": [
+        {
+            "role": "HR Executive",
+            "required": ["recruitment", "onboarding", "communication"],
+            "optional": ["payroll", "employee engagement"],
+            "avg_salary": "₹3-7 LPA",
+            "demand": "Medium"
+        },
+        {
+            "role": "Talent Acquisition Specialist",
+            "required": ["talent acquisition", "recruitment", "communication"],
+            "optional": ["training", "compliance"],
+            "avg_salary": "₹4-8 LPA",
+            "demand": "Medium"
+        }
+    ],
+    "design": [
+        {
+            "role": "UI/UX Designer",
+            "required": ["figma", "ui", "ux", "wireframe"],
+            "optional": ["prototype", "design thinking"],
+            "avg_salary": "₹4-10 LPA",
+            "demand": "Medium"
+        },
+        {
+            "role": "Graphic Designer",
+            "required": ["photoshop", "illustrator", "graphic design"],
+            "optional": ["canva", "branding"],
+            "avg_salary": "₹3-7 LPA",
+            "demand": "Medium"
+        }
+    ],
+    "general": [
+        {
+            "role": "Office Executive",
+            "required": ["communication", "excel"],
+            "optional": ["management", "leadership"],
+            "avg_salary": "₹2-5 LPA",
+            "demand": "Medium"
+        }
+    ]
+}
 
 
-def suggest_skills_to_learn(resume_text: str) -> list:
-    """
-    Suggest missing skills to learn, relevant to the person's actual field.
-    Returns list of {"skill": str, "frequency": int} sorted by priority.
-    """
-    prompt = f"""You are a career advisor. Analyze this resume.
-
-Identify the top 8 skills this person should learn to advance IN THEIR SPECIFIC FIELD.
-- Base this on their current skills, experience level, and field.
-- Do NOT suggest generic tech skills if they are not in tech.
-- Prioritize skills that appear across multiple relevant job roles.
-- Assign a frequency score (1-5) indicating how critical the skill is.
-
-Return ONLY valid JSON, no explanation:
-[
-  {{"skill": "Skill Name", "frequency": 4}},
-  {{"skill": "Another Skill", "frequency": 3}}
-]
-
-Resume:
-\"\"\"
-{resume_text[:3000]}
-\"\"\"
-"""
-    try:
-        raw = _ask_claude(prompt, max_tokens=800)
-        return _parse_json(raw)
-    except Exception:
-        return []
+# -------------------------------
+# HELPERS
+# -------------------------------
+def normalize_text(text):
+    return re.sub(r"\s+", " ", text.lower()).strip()
 
 
-def get_all_skills_flat(resume_text: str) -> list:
-    """Return flat list of all matched skills."""
-    skills_by_cat = extract_skills(resume_text)
-    return [s for skills in skills_by_cat.values() for s in skills]
+def extract_resume_keywords(text):
+    text = normalize_text(text)
+    found = set()
+
+    all_keywords = set()
+    for field_data in SKILLS_DB.values():
+        for skill_list in field_data.values():
+            all_keywords.update(skill_list)
+
+    for field_roles in ROLE_DB.values():
+        for role in field_roles:
+            all_keywords.update(role["required"])
+            all_keywords.update(role["optional"])
+
+    for kw in all_keywords:
+        if kw in text:
+            found.add(kw)
+
+    return found
 
 
-def identify_missing_skills(resume_text: str, top_roles: int = 3) -> dict:
-    """For the top N matched roles, list which skills are missing."""
-    matches = match_job_roles(resume_text)[:top_roles]
-    missing = {}
-    for m in matches:
-        if m.get("missing_required"):
-            missing[m["role"]] = m["missing_required"]
-    return missing
+# -------------------------------
+# FIELD DETECTION
+# -------------------------------
+def detect_field(resume_text):
+    text = normalize_text(resume_text)
+    scores = {}
+
+    for field, keywords in FIELD_KEYWORDS.items():
+        scores[field] = sum(1 for kw in keywords if kw in text)
+
+    best_field = max(scores, key=scores.get)
+    if scores[best_field] == 0:
+        return "general"
+
+    return best_field
+
+
+# -------------------------------
+# SKILL EXTRACTION
+# -------------------------------
+def extract_skills(resume_text, detected_field="general"):
+    text = normalize_text(resume_text)
+
+    if detected_field not in SKILLS_DB:
+        detected_field = "general"
+
+    categorized_skills = {}
+    for category, skills in SKILLS_DB[detected_field].items():
+        found = [skill for skill in skills if skill in text]
+        if found:
+            categorized_skills[category] = found
+
+    return categorized_skills
+
+
+# -------------------------------
+# JOB MATCHING
+# -------------------------------
+def match_job_roles(resume_text, detected_field="general"):
+    text = normalize_text(resume_text)
+    resume_skills = extract_resume_keywords(text)
+
+    if detected_field not in ROLE_DB:
+        detected_field = "general"
+
+    matches = []
+
+    for role_data in ROLE_DB[detected_field]:
+        required = set(role_data["required"])
+        optional = set(role_data["optional"])
+
+        required_matched = sorted(list(required.intersection(resume_skills)))
+        missing_required = sorted(list(required - resume_skills))
+        optional_matched = sorted(list(optional.intersection(resume_skills)))
+
+        if len(required) > 0:
+            required_score = (len(required_matched) / len(required)) * 70
+        else:
+            required_score = 0
+
+        if len(optional) > 0:
+            optional_score = (len(optional_matched) / len(optional)) * 30
+        else:
+            optional_score = 0
+
+        match_pct = round(required_score + optional_score)
+
+        matches.append({
+            "role": role_data["role"],
+            "match_pct": match_pct,
+            "avg_salary": role_data["avg_salary"],
+            "demand": role_data["demand"],
+            "required_matched": required_matched,
+            "missing_required": missing_required,
+            "optional_matched": optional_matched
+        })
+
+    matches = sorted(matches, key=lambda x: x["match_pct"], reverse=True)
+    return matches
+
+
+# -------------------------------
+# MISSING / PRIORITY SKILLS
+# -------------------------------
+def suggest_skills_to_learn(resume_text, detected_field="general", job_matches=None):
+    text = normalize_text(resume_text)
+    resume_skills = extract_resume_keywords(text)
+
+    if detected_field not in ROLE_DB:
+        detected_field = "general"
+
+    if job_matches is None:
+        job_matches = match_job_roles(resume_text, detected_field)
+
+    top_roles = job_matches[:5]
+    counter = Counter()
+
+    for role in top_roles:
+        for skill in role.get("missing_required", []):
+            counter[skill] += 1
+
+    suggestions = []
+    for skill, freq in counter.most_common():
+        suggestions.append({
+            "skill": skill,
+            "frequency": freq
+        })
+
+    return suggestions
