@@ -16,14 +16,16 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from utils.parser import extract_text, extract_email, extract_phone, extract_name
 from utils.scorer import score_resume
-from utils.skill_analyzer import (
-    detect_field,
-    extract_skills,
-    match_job_roles,
-    suggest_skills_to_learn
-)
+from utils.skill_analyzer import extract_skills, match_job_roles, suggest_skills_to_learn
 from utils.roadmap import generate_roadmap, get_course_recommendations, get_company_suggestions
 from utils.feedback import generate_feedback
+
+from job_matcher import (
+    load_processed_jobs,
+    match_resume_to_jobs,
+    get_missing_skills_from_top_jobs,
+    calculate_confidence
+)
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -122,29 +124,34 @@ if len(resume_text.strip()) < 50:
 
 # ── Run analysis ─────────────────────────────────────────────────────────────
 with st.spinner("Analyzing resume..."):
-    name = extract_name(resume_text)
-    email = extract_email(resume_text)
-    phone = extract_phone(resume_text)
-
-    detected_field = detect_field(resume_text)
-
-    ats = score_resume(resume_text, detected_field)
-    skills_map = extract_skills(resume_text, detected_field)
-    job_matches = match_job_roles(resume_text, detected_field)
-    missing = suggest_skills_to_learn(resume_text, detected_field, job_matches)
-    roadmap = generate_roadmap(resume_text, detected_field, missing)
-    courses = get_course_recommendations(missing, detected_field)
-    companies = get_company_suggestions(resume_text, detected_field, job_matches)
+    name        = extract_name(resume_text)
+    email       = extract_email(resume_text)
+    phone       = extract_phone(resume_text)
+    ats         = score_resume(resume_text)
+    skills_map  = extract_skills(resume_text)
+    job_matches = match_job_roles(resume_text)
+    missing     = suggest_skills_to_learn(resume_text)
+    roadmap     = generate_roadmap(resume_text)
+    courses     = get_course_recommendations(missing)
+    companies   = get_company_suggestions(resume_text)
     feedback = generate_feedback(resume_text, skills_map, ats["total"])
+    jobs_df = load_processed_jobs("processed_jobs.csv")
+    top_matches = match_resume_to_jobs(resume_text, jobs_df, top_n=10)
+    missing_skills_real = get_missing_skills_from_top_jobs(resume_text, top_matches, top_k=10)
+    confidence = calculate_confidence(top_matches)
 
 
 # ── Header ───────────────────────────────────────────────────────────────────
 st.markdown(f"# 👤 {name}")
-col_e, col_p, col_f, col_field = st.columns(4)
-col_e.metric("Email", email if email else "Not found")
-col_p.metric("Phone", phone if phone else "Not found")
+col_e, col_p, col_f = st.columns(3)
+col_e.metric("Email", email)
+col_p.metric("Phone", phone)
 col_f.metric("File", uploaded_file.name)
-col_field.metric("Detected Field", detected_field.title() if detected_field else "General")
+st.markdown("---")
+st.subheader("AI Job Match Summary")
+c1, c2 = st.columns(2)
+c1.metric("Confidence Score", f"{confidence['score']}%")
+c2.metric("Confidence Level", confidence["label"])
 
 st.markdown("---")
 
@@ -194,8 +201,8 @@ with tab1:
         fig_gauge.update_layout(height=260, margin=dict(t=40, b=0, l=20, r=20))
         st.plotly_chart(fig_gauge, use_container_width=True)
 
-        st.metric("Word count", ats.get("word_count", 0))
-        st.metric("Characters", ats.get("char_count", 0))
+        st.metric("Word count", ats["word_count"])
+        st.metric("Characters", ats["char_count"])
 
     with detail_col:
         st.markdown('<div class="section-title">Score Breakdown</div>', unsafe_allow_html=True)
@@ -219,139 +226,148 @@ with tab1:
             showlegend=False
         ))
         fig_bar.update_layout(
-            barmode='stack', height=300,
+            barmode='stack', height=280,
             margin=dict(t=10, b=10, l=10, r=60),
             legend=dict(orientation="h", y=-0.15),
             xaxis_title="Points"
         )
         st.plotly_chart(fig_bar, use_container_width=True)
 
+        # Details
         for key, val in breakdown.items():
-            found_items = val.get("found", [])
-            if found_items:
-                badges = " ".join([f'<span class="badge badge-blue">{s}</span>' for s in found_items[:8]])
+            if val["found"]:
+                badges = " ".join([f'<span class="badge badge-blue">{s}</span>' for s in val["found"][:6]])
                 st.markdown(
                     f"**{val['label']}** ({val['score']}/{val['max']}): {badges}",
                     unsafe_allow_html=True
                 )
 
+    # Tips
     st.markdown("---")
     st.markdown('<div class="section-title">💡 Improvement Tips</div>', unsafe_allow_html=True)
     tip_col1, tip_col2 = st.columns(2)
-
     with tip_col1:
-        if "sections" in breakdown and breakdown["sections"]["score"] < 15:
-            required_sections = ["summary", "experience", "education", "skills", "projects"]
-            found_sections = breakdown["sections"].get("found", [])
-            missing_sections = [s for s in required_sections if s not in found_sections]
-            if missing_sections:
-                st.warning("Add missing sections: " + ", ".join(missing_sections))
-
-        if "metrics" in breakdown and breakdown["metrics"]["score"] < 12:
-            st.warning("Add quantifiable achievements like 'increased sales by 20%' or 'handled 200+ invoices'")
-
+        if breakdown["sections"]["score"] < 15:
+            st.warning("Add missing sections: " + ", ".join(
+                s for s in ["summary", "experience", "education", "skills", "projects"]
+                if s not in breakdown["sections"]["found"]
+            ))
+        if breakdown["metrics"]["score"] < 12:
+            st.warning("Add quantifiable achievements (e.g. 'increased revenue by 30%', 'led team of 5')")
     with tip_col2:
-        if "action_verbs" in breakdown and breakdown["action_verbs"]["score"] < 12:
-            st.info("Use strong action verbs: Built, Developed, Managed, Led, Optimized, Delivered")
-        if "formatting" in breakdown and breakdown["formatting"]["score"] < 15:
-            st.info("Keep formatting simple and make sure contact details are clearly visible")
+        if breakdown["action_verbs"]["score"] < 12:
+            st.info("Use stronger action verbs: Built, Developed, Led, Optimized, Deployed...")
+        if breakdown["formatting"]["score"] < 15:
+            st.info("Add LinkedIn/GitHub URL and ensure contact info is clearly visible")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TAB 2 — Job Matching
 # ═══════════════════════════════════════════════════════════════════════════
+st.subheader("Top Real Job Matches")
+
+if not top_matches.empty:
+    cols_to_show = ["job_title", "role", "match_percent"]
+
+if "company" in top_matches.columns:
+    cols_to_show.append("company")
+
+if "location" in top_matches.columns:
+    cols_to_show.append("location")
+
+    show_df = top_matches[cols_to_show].head(10)
+
+    st.dataframe(show_df, use_container_width=True)
+else:
+    st.warning("No matching jobs found.")
 with tab2:
     st.markdown('<div class="section-title">Top Job Role Matches</div>', unsafe_allow_html=True)
-    st.caption(f"Showing roles based on detected field: {detected_field.title()}")
 
-    top5 = job_matches[:5] if job_matches else []
+    top5 = job_matches[:5]
+    df_roles = pd.DataFrame([{
+        "Role": r["role"],
+        "Match %": r["match_pct"],
+        "Avg Salary": r["avg_salary"],
+        "Market Demand": r["demand"]
+    } for r in top5])
 
-    if top5:
-        df_roles = pd.DataFrame([{
-            "Role": r["role"],
-            "Match %": r["match_pct"],
-            "Avg Salary": r.get("avg_salary", "N/A"),
-            "Market Demand": r.get("demand", "N/A")
-        } for r in top5])
+    # Bar chart
+    fig_roles = px.bar(
+        df_roles, x="Match %", y="Role", orientation='h',
+        color="Match %", color_continuous_scale=["#fee2e2","#fef9c3","#dcfce7","#22c55e"],
+        range_color=[0, 100], text="Match %"
+    )
+    fig_roles.update_traces(texttemplate='%{text}%', textposition='outside')
+    fig_roles.update_layout(
+        height=320, margin=dict(t=10, b=10, l=10, r=60),
+        coloraxis_showscale=False
+    )
+    st.plotly_chart(fig_roles, use_container_width=True)
 
-        fig_roles = px.bar(
-            df_roles, x="Match %", y="Role", orientation='h',
-            color="Match %", color_continuous_scale=["#fee2e2","#fef9c3","#dcfce7","#22c55e"],
-            range_color=[0, 100], text="Match %"
-        )
-        fig_roles.update_traces(texttemplate='%{text}%', textposition='outside')
-        fig_roles.update_layout(
-            height=320, margin=dict(t=10, b=10, l=10, r=60),
-            coloraxis_showscale=False
-        )
-        st.plotly_chart(fig_roles, use_container_width=True)
+    # Cards
+    for i, role in enumerate(top5):
+        pct = role["match_pct"]
+        color = "green" if pct >= 70 else "amber" if pct >= 40 else "red"
+        with st.expander(f"{'🥇' if i==0 else '🥈' if i==1 else '🥉' if i==2 else '🔹'} {role['role']} — {pct}% match"):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Match", f"{pct}%")
+            c2.metric("Salary", role["avg_salary"])
+            c3.metric("Demand", role["demand"])
 
-        for i, role in enumerate(top5):
-            pct = role["match_pct"]
-            with st.expander(f"{'🥇' if i==0 else '🥈' if i==1 else '🥉' if i==2 else '🔹'} {role['role']} — {pct}% match"):
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Match", f"{pct}%")
-                c2.metric("Salary", role.get("avg_salary", "N/A"))
-                c3.metric("Demand", role.get("demand", "N/A"))
-
-                if role.get("required_matched"):
-                    st.markdown("**✅ Skills you have:**")
-                    st.markdown(" ".join([f'<span class="badge badge-green">{s}</span>' for s in role["required_matched"]]), unsafe_allow_html=True)
-
-                if role.get("missing_required"):
-                    st.markdown("**❌ Missing required skills:**")
-                    st.markdown(" ".join([f'<span class="badge badge-red">{s}</span>' for s in role["missing_required"]]), unsafe_allow_html=True)
-
-                if role.get("optional_matched"):
-                    st.markdown("**⭐ Bonus skills you have:**")
-                    st.markdown(" ".join([f'<span class="badge badge-purple">{s}</span>' for s in role["optional_matched"]]), unsafe_allow_html=True)
-    else:
-        st.info("No job role matches available yet.")
+            if role["required_matched"]:
+                st.markdown("**✅ Skills you have:**")
+                st.markdown(" ".join([f'<span class="badge badge-green">{s}</span>' for s in role["required_matched"]]), unsafe_allow_html=True)
+            if role["missing_required"]:
+                st.markdown("**❌ Missing required skills:**")
+                st.markdown(" ".join([f'<span class="badge badge-red">{s}</span>' for s in role["missing_required"]]), unsafe_allow_html=True)
+            if role["optional_matched"]:
+                st.markdown("**⭐ Bonus skills you have:**")
+                st.markdown(" ".join([f'<span class="badge badge-purple">{s}</span>' for s in role["optional_matched"]]), unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TAB 3 — Skills
 # ═══════════════════════════════════════════════════════════════════════════
+st.subheader("Missing Skills (Based on Real Jobs)")
+
+if missing_skills_real:
+    for skill in missing_skills_real:
+        st.write(f"{skill['skill']} (demand: {skill['frequency']})")
+else:
+    st.success("No major missing skills found")
 with tab3:
     present_col, missing_col = st.columns(2)
 
     with present_col:
         st.markdown('<div class="section-title">Skills Found in Resume</div>', unsafe_allow_html=True)
-        st.caption(f"Detected according to {detected_field.title()} field")
-
         if skills_map:
             for category, skills_list in skills_map.items():
                 st.markdown(f"**{category}**")
                 badges = " ".join([f'<span class="badge badge-blue">{s}</span>' for s in skills_list])
                 st.markdown(badges, unsafe_allow_html=True)
                 st.markdown("")
-
+            # Radar chart
             categories = list(skills_map.keys())
             values = [len(v) for v in skills_map.values()]
-
-            if categories and values:
-                fig_radar = go.Figure(go.Scatterpolar(
-                    r=values + [values[0]],
-                    theta=categories + [categories[0]],
-                    fill='toself',
-                    fillcolor='rgba(99,102,241,0.2)',
-                    line=dict(color='#6366f1')
-                ))
-                fig_radar.update_layout(
-                    polar=dict(radialaxis=dict(visible=True, range=[0, max(values)+1])),
-                    height=300, margin=dict(t=10, b=10)
-                )
-                st.plotly_chart(fig_radar, use_container_width=True)
+            fig_radar = go.Figure(go.Scatterpolar(
+                r=values + [values[0]],
+                theta=categories + [categories[0]],
+                fill='toself', fillcolor='rgba(99,102,241,0.2)',
+                line=dict(color='#6366f1')
+            ))
+            fig_radar.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, max(values)+1])),
+                height=300, margin=dict(t=10, b=10)
+            )
+            st.plotly_chart(fig_radar, use_container_width=True)
         else:
-            st.info("No recognizable skills found in the resume.")
+            st.info("No recognizable skills found. Make sure your resume uses standard skill names.")
 
     with missing_col:
         st.markdown('<div class="section-title">Skills to Learn (Priority)</div>', unsafe_allow_html=True)
-        st.caption(f"Recommended for {detected_field.title()} roles")
-
         if missing:
             for item in missing:
-                freq = item.get("frequency", 1)
+                freq = item["frequency"]
                 bar_pct = min(100, freq * 20)
                 color_class = "badge-red" if freq >= 4 else "badge-amber" if freq >= 2 else "badge-blue"
                 st.markdown(
@@ -369,31 +385,24 @@ with tab3:
 # ═══════════════════════════════════════════════════════════════════════════
 with tab4:
     st.markdown('<div class="section-title">Skill Improvement Roadmap</div>', unsafe_allow_html=True)
-    st.caption(f"Roadmap customized for {detected_field.title()} field")
 
     phase_colors = {
         "Phase 1 – Quick Wins": "#22c55e",
         "Phase 2 – Core Skills": "#6366f1",
-        "Phase 3 – Advanced": "#f59e0b"
+        "Phase 3 – Advanced":   "#f59e0b"
     }
 
-    if roadmap:
-        for phase, info in roadmap.items():
-            color = phase_colors.get(phase, "#64748b")
-            skills_html = "".join(
-                [f'<span class="badge badge-blue" style="margin:2px;">{s}</span>' for s in info.get("skills", [])]
-            )
-            st.markdown(f"""
-            <div style="border-left:4px solid {color}; padding:0.75rem 1rem;
-                        background:#f8fafc; border-radius:0 8px 8px 0; margin-bottom:1rem;">
-                <strong style="color:{color};">{phase}</strong>
-                <span style="color:#64748b; font-size:13px; margin-left:8px;">⏱ {info.get('duration', '')}</span><br>
-                <small style="color:#475569;">{info.get('description', '')}</small><br><br>
-                {skills_html}
-            </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.info("No roadmap generated yet.")
+    for phase, info in roadmap.items():
+        color = phase_colors.get(phase, "#64748b")
+        st.markdown(f"""
+        <div style="border-left:4px solid {color}; padding:0.75rem 1rem;
+                    background:#f8fafc; border-radius:0 8px 8px 0; margin-bottom:1rem;">
+            <strong style="color:{color};">{phase}</strong>
+            <span style="color:#64748b; font-size:13px; margin-left:8px;">⏱ {info['duration']}</span><br>
+            <small style="color:#475569;">{info['description']}</small><br><br>
+            {"".join([f'<span class="badge badge-blue" style="margin:2px;">{s}</span>' for s in info['skills']])}
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown('<div class="section-title">📚 Recommended Courses</div>', unsafe_allow_html=True)
@@ -401,22 +410,18 @@ with tab4:
     if courses:
         df_courses = pd.DataFrame(courses)
         df_courses.columns = [c.title() for c in df_courses.columns]
-        if "Url" in df_courses.columns:
-            df_courses["Url"] = df_courses["Url"].apply(
-                lambda u: f'<a href="{u}" target="_blank">Open →</a>'
-            )
+        df_courses["Url"] = df_courses["Url"].apply(
+            lambda u: f'<a href="{u}" target="_blank">Open →</a>'
+        )
         st.write(df_courses.to_html(escape=False, index=False), unsafe_allow_html=True)
     else:
         st.info("Add more skills to your resume for personalized course recommendations.")
+        
+st.markdown("---")
+st.markdown('<div class="section-title">📢 Resume Feedback</div>', unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown('<div class="section-title">📢 Resume Feedback</div>', unsafe_allow_html=True)
-
-    if feedback:
-        for f in feedback:
-            st.warning(f)
-    else:
-        st.success("No major issues found.")
+for f in feedback:
+    st.warning(f)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -424,27 +429,27 @@ with tab4:
 # ═══════════════════════════════════════════════════════════════════════════
 with tab5:
     st.markdown('<div class="section-title">Companies Where You Can Apply</div>', unsafe_allow_html=True)
-    st.caption(f"Based on your {detected_field.title()} profile and matched roles")
+    st.caption("Based on your top matched roles and current skill set")
 
     if companies:
-        for company in companies:
-            pct = company.get("match_pct", 0)
+        for i, company in enumerate(companies):
+            pct = company["match_pct"]
             color = "#22c55e" if pct >= 70 else "#f59e0b" if pct >= 50 else "#6366f1"
             st.markdown(f"""
             <div class="company-card">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
-                        <strong style="font-size:1rem;">{company.get('name', 'Unknown')}</strong>
-                        <span class="badge badge-blue" style="margin-left:8px;">{company.get('type', 'N/A')}</span>
-                        <span class="badge badge-purple" style="margin-left:4px;">{company.get('size', 'N/A')} employees</span>
+                        <strong style="font-size:1rem;">{company['name']}</strong>
+                        <span class="badge badge-blue" style="margin-left:8px;">{company['type']}</span>
+                        <span class="badge badge-purple" style="margin-left:4px;">{company['size']} employees</span>
                     </div>
                     <div style="text-align:right;">
                         <span style="font-weight:700; color:{color};">{pct}% profile match</span><br>
-                        <small style="color:#64748b;">for {company.get('matched_role', 'N/A')}</small>
+                        <small style="color:#64748b;">for {company['matched_role']}</small>
                     </div>
                 </div>
                 <div style="margin-top:8px;">
-                    <a href="{company.get('url', '#')}" target="_blank"
+                    <a href="{company['url']}" target="_blank"
                        style="color:#6366f1; font-size:13px; text-decoration:none;">
                         🔗 View open positions →
                     </a>
@@ -452,10 +457,10 @@ with tab5:
             </div>
             """, unsafe_allow_html=True)
     else:
-        st.info("No personalized company suggestions available yet.")
+        st.info("Upload a resume with more skills to get personalized company suggestions.")
 
     st.markdown("---")
-    st.caption("💡 Tip: Tailor your resume for each company and job description to increase ATS score.")
+    st.caption("💡 Tip: Tailor your resume for each company. Keyword-match the job description to increase your ATS score.")
 
 st.markdown("---")
 
@@ -464,10 +469,11 @@ st.markdown("## 💬 User Feedback")
 with st.form("feedback_form"):
     rating = st.slider("⭐ Rate your experience", 1, 5, 4)
     message = st.text_area("📝 Write your feedback")
+
     submit = st.form_submit_button("Submit")
 
     if submit:
-        with open("feedback.csv", "a", newline="", encoding="utf-8") as f:
+        with open("feedback.csv", "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([rating, message])
 
