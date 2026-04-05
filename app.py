@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from utils.parser import extract_text, extract_email, extract_phone, extract_name
 from utils.scorer import score_resume
-from utils.skill_analyzer2 import (
+from utils.skill_analyzer import (
     detect_field,
     extract_skills,
     match_job_roles,
