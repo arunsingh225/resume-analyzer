@@ -1,0 +1,7 @@
+job_title,role,skills,job_description,qualifications,responsibilities
+Data Scientist,Data Scientist,"python, machine learning, pandas, numpy, sql","Analyze data and build ML models","B.Tech or relevant degree","Build models, analyze datasets"
+Frontend Developer,Frontend Developer,"html, css, javascript, react","Build UI for web apps","Knowledge of frontend","Develop UI components"
+Backend Developer,Backend Developer,"python, django, flask, sql, api","Build backend systems","Experience with APIs","Develop APIs, manage database"
+HR Executive,HR,"recruitment, onboarding, payroll, communication","Manage hiring and HR tasks","MBA HR preferred","Handle recruitment and employee data"
+Accountant,Finance,"tally, gst, accounting, excel","Manage financial records","B.Com or CA","Handle accounts and reports"
+Digital Marketer,Marketing,"seo, social media, marketing, ads","Promote brand online","Marketing knowledge","Run campaigns"
